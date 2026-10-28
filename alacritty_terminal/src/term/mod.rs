@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as Base64;
 use bitflags::bitflags;
 use log::{debug, trace};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
@@ -979,6 +979,93 @@ impl<T> Term<T> {
         self.damage_cursor();
     }
 
+    /// ranma: VS16 asks for the emoji presentation of the character before it,
+    /// which takes two cells (Unicode TR51, and what unicode-width, ratatui,
+    /// kitty and WezTerm measure). Upstream keeps such a character in the one
+    /// cell it arrived in, so a program that lays it out as two writes the rest
+    /// of the line a column left of where it means to.
+    ///
+    /// The narrow cell just written becomes a wide one, as if the character had
+    /// arrived wide: a spacer after it, the cursor past the spacer, and at the
+    /// right margin the character moved to the next line behind a leading
+    /// spacer. Returns `false` when there is nothing to widen; the caller then
+    /// attaches VS16 as any other zero-width character.
+    fn widen_for_emoji_presentation(&mut self) -> bool
+    where
+        T: EventListener,
+    {
+        let columns = self.columns();
+        let cursor = self.grid.cursor.point;
+        let at_margin = self.grid.cursor.input_needs_wrap;
+        if columns < 2 || (!at_margin && cursor.column.0 == 0) {
+            return false;
+        }
+        let column = if at_margin { cursor.column } else { cursor.column - 1 };
+        let mut base = self.grid[cursor.line][column].clone();
+        let unwidened =
+            Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+        if base.flags.intersects(unwidened) || !has_wide_emoji_presentation(base.c) {
+            return false;
+        }
+
+        let column = if at_margin {
+            if !self.mode.contains(TermMode::LINE_WRAP) {
+                return false;
+            }
+            self.grid.cursor.template.flags.insert(Flags::LEADING_WIDE_CHAR_SPACER);
+            self.write_at_cursor(' ');
+            self.grid.cursor.template.flags.remove(Flags::LEADING_WIDE_CHAR_SPACER);
+            self.wrapline();
+            if self.mode.contains(TermMode::INSERT) {
+                self.shift_right(2);
+            }
+            // Clears whatever wide character the base lands on.
+            self.write_at_cursor(base.c);
+            let column = self.grid.cursor.point.column;
+            self.grid.cursor.point.column += 1;
+            column
+        } else {
+            if self.mode.contains(TermMode::INSERT) {
+                self.shift_right(1);
+            }
+            column
+        };
+
+        // The spacer first: writing it over a stale spacer clears the wide flag
+        // of the cell before it, which is the base.
+        self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR_SPACER);
+        self.write_at_cursor(' ');
+        self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR_SPACER);
+
+        base.flags.insert(Flags::WIDE_CHAR);
+        base.push_zerowidth(VS16);
+        let line = self.grid.cursor.point.line;
+        self.grid[line][column] = base;
+        self.damage.damage_line(line.0 as usize, column.0, column.0 + 1);
+
+        if self.grid.cursor.point.column + 1 < columns {
+            self.grid.cursor.point.column += 1;
+        } else {
+            self.grid.cursor.input_needs_wrap = true;
+        }
+        true
+    }
+
+    /// ranma: in insert mode, shift the cursor's line right by `width` cells
+    /// from the cursor, as `input` does before writing a character.
+    fn shift_right(&mut self, width: usize) {
+        let columns = self.columns();
+        let line = self.grid.cursor.point.line;
+        let col = self.grid.cursor.point.column;
+        if col + width >= columns {
+            return;
+        }
+        let row = &mut self.grid[line][..];
+        for col in (col.0..(columns - width)).rev() {
+            row.swap(col + width, col);
+        }
+    }
+
     /// Write `c` to the cell at the cursor position.
     #[inline(always)]
     fn write_at_cursor(&mut self, c: char) {
@@ -1056,6 +1143,26 @@ impl<T> Dimensions for Term<T> {
     }
 }
 
+/// ranma: the upstream release this fork is built on, reported to programs
+/// as the terminal's version (secondary device attributes) where upstream
+/// reports its own package version. The fork numbers its releases on its own,
+/// and a program reading the version should see the code it is running.
+const UPSTREAM_VERSION: &str = "0.26.0";
+
+/// ranma: VARIATION SELECTOR-16, which asks for emoji presentation.
+const VS16: char = '\u{FE0F}';
+
+/// ranma: whether `c` is one cell alone and two with VS16 after it: an emoji
+/// variation sequence base, by unicode-width's tables (the ones ratatui and
+/// most programs measure with).
+fn has_wide_emoji_presentation(c: char) -> bool {
+    let mut buf = [0u8; 8];
+    let len = c.encode_utf8(&mut buf).len();
+    let vs = VS16.encode_utf8(&mut buf[len..]).len();
+    let s = std::str::from_utf8(&buf[..len + vs]).unwrap_or_default();
+    c.width() == Some(1) && s.width() == 2
+}
+
 impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
@@ -1068,6 +1175,11 @@ impl<T: EventListener> Handler for Term<T> {
 
         // Handle zero-width characters.
         if width == 0 {
+            // ranma: VS16 widens an emoji before it to two cells.
+            if c == VS16 && self.widen_for_emoji_presentation() {
+                return;
+            }
+
             // Get previous column.
             let mut column = self.grid.cursor.point.column;
             if !self.grid.cursor.input_needs_wrap {
@@ -1263,7 +1375,7 @@ impl<T: EventListener> Handler for Term<T> {
             },
             Some('>') => {
                 trace!("Reporting secondary device attributes");
-                let version = version_number(env!("CARGO_PKG_VERSION"));
+                let version = version_number(UPSTREAM_VERSION);
                 let text = format!("\x1b[>0;{version};1c");
                 self.event_proxy.send_event(Event::PtyWrite(text));
             },
@@ -3293,10 +3405,121 @@ mod tests {
 
     #[test]
     fn parse_cargo_version() {
-        assert!(version_number(env!("CARGO_PKG_VERSION")) >= 10_01);
+        assert!(version_number(UPSTREAM_VERSION) >= 10_01);
         assert_eq!(version_number("0.0.1-dev"), 1);
         assert_eq!(version_number("0.1.2-dev"), 1_02);
         assert_eq!(version_number("1.2.3-dev"), 1_02_03);
         assert_eq!(version_number("999.99.99"), 9_99_99_99);
+    }
+}
+
+/// ranma: VS16 widening (`widen_for_emoji_presentation`).
+#[cfg(test)]
+mod ranma_vs16_tests {
+    use super::*;
+
+    use crate::event::VoidListener;
+    use crate::index::Column;
+    use crate::term::cell::Flags;
+    use crate::term::test::TermSize;
+    use crate::vte::ansi::{Handler, NamedMode};
+
+    fn term(columns: usize) -> Term<VoidListener> {
+        Term::new(Config::default(), &TermSize::new(columns, 3), VoidListener)
+    }
+
+    fn write(term: &mut Term<VoidListener>, s: &str) {
+        for c in s.chars() {
+            term.input(c);
+        }
+    }
+
+    fn cell(term: &Term<VoidListener>, line: i32, column: usize) -> &Cell {
+        &term.grid()[Line(line)][Column(column)]
+    }
+
+    #[test]
+    fn vs16_widens_an_emoji_to_two_cells() {
+        let mut t = term(6);
+        write(&mut t, "\u{2764}\u{FE0F}X");
+        let heart = cell(&t, 0, 0);
+        assert_eq!(heart.c, '\u{2764}');
+        assert!(heart.flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(heart.zerowidth(), Some(&['\u{FE0F}'][..]));
+        assert!(cell(&t, 0, 1).flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert_eq!(cell(&t, 0, 2).c, 'X');
+        assert_eq!(t.grid().cursor.point.column, Column(3));
+    }
+
+    #[test]
+    fn vs16_after_a_character_without_an_emoji_form_is_only_a_mark() {
+        let mut t = term(6);
+        write(&mut t, "a\u{FE0F}X");
+        assert!(!cell(&t, 0, 0).flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(cell(&t, 0, 0).zerowidth(), Some(&['\u{FE0F}'][..]));
+        assert_eq!(cell(&t, 0, 1).c, 'X');
+    }
+
+    #[test]
+    fn vs16_after_a_wide_emoji_changes_nothing_but_the_mark() {
+        let mut t = term(6);
+        write(&mut t, "\u{1F4AC}\u{FE0F}X");
+        assert!(cell(&t, 0, 0).flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(cell(&t, 0, 0).zerowidth(), Some(&['\u{FE0F}'][..]));
+        assert_eq!(cell(&t, 0, 2).c, 'X');
+    }
+
+    #[test]
+    fn vs16_at_the_margin_moves_the_emoji_to_the_next_line() {
+        let mut t = term(4);
+        write(&mut t, "abc\u{2764}\u{FE0F}X");
+        assert!(cell(&t, 0, 3).flags.contains(Flags::LEADING_WIDE_CHAR_SPACER));
+        assert_eq!(cell(&t, 0, 3).c, ' ');
+        assert!(cell(&t, 0, 3).flags.contains(Flags::WRAPLINE));
+        assert_eq!(cell(&t, 1, 0).c, '\u{2764}');
+        assert!(cell(&t, 1, 0).flags.contains(Flags::WIDE_CHAR));
+        assert!(cell(&t, 1, 1).flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert_eq!(cell(&t, 1, 2).c, 'X');
+    }
+
+    #[test]
+    fn vs16_at_the_margin_without_wrapping_stays_one_cell() {
+        let mut t = term(4);
+        t.mode.remove(TermMode::LINE_WRAP);
+        write(&mut t, "abc\u{2764}\u{FE0F}");
+        assert_eq!(cell(&t, 0, 3).c, '\u{2764}');
+        assert!(!cell(&t, 0, 3).flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(cell(&t, 0, 3).zerowidth(), Some(&['\u{FE0F}'][..]));
+    }
+
+    #[test]
+    fn vs16_in_insert_mode_pushes_the_line_right() {
+        let mut t = term(6);
+        write(&mut t, "AB");
+        t.goto(0, 0);
+        t.set_mode(NamedMode::Insert.into());
+        write(&mut t, "\u{2764}\u{FE0F}");
+        assert!(cell(&t, 0, 0).flags.contains(Flags::WIDE_CHAR));
+        assert!(cell(&t, 0, 1).flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert_eq!(cell(&t, 0, 2).c, 'A');
+        assert_eq!(cell(&t, 0, 3).c, 'B');
+    }
+
+    #[test]
+    fn vs16_over_a_wide_character_leaves_no_stale_spacer() {
+        let mut t = term(6);
+        write(&mut t, "a\u{30B3}");
+        t.goto(0, 0);
+        write(&mut t, "\u{2764}\u{FE0F}");
+        assert!(cell(&t, 0, 0).flags.contains(Flags::WIDE_CHAR));
+        assert!(cell(&t, 0, 1).flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert!(!cell(&t, 0, 2).flags.contains(Flags::WIDE_CHAR_SPACER));
+    }
+
+    #[test]
+    fn vs16_with_nothing_before_it_is_harmless() {
+        let mut t = term(4);
+        write(&mut t, "\u{FE0F}X");
+        assert_eq!(cell(&t, 0, 0).c, 'X');
     }
 }

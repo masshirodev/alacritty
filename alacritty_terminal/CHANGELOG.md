@@ -8,6 +8,18 @@ sections should follow the order `Added`, `Changed`, `Deprecated`, `Fixed` and
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## ranma-alacritty-terminal 0.1.0 (on alacritty_terminal 0.26.0)
+
+The fork's releases are listed here under its own name; the sections below
+them are upstream's. See `README.md`.
+
+### Changed
+
+- VS16 (U+FE0F) after a character with a two-cell emoji presentation widens
+  its cell to two, as unicode-width and most terminals measure it
+- The secondary device attributes reply reports the upstream version the fork
+  is built on (0.26.0), not the package version
+
 ## 0.26.0
 
 ### Added

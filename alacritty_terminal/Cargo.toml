@@ -1,14 +1,17 @@
 [package]
-name = "alacritty_terminal"
-version = "0.26.0"
+name = "ranma-alacritty-terminal"
+version = "0.1.0"
 authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
 license = "Apache-2.0"
-description = "Library for writing terminal emulators"
-readme = "../README.md"
-homepage = "https://alacritty.org"
-repository = "https://github.com/alacritty/alacritty"
+description = "alacritty_terminal 0.26.0 with emoji presentation (VS16) taking two cells, for ranma"
+readme = "README.md"
+repository = "https://github.com/masshirodev/alacritty"
 edition.workspace = true
 rust-version.workspace = true
+
+# The library keeps upstream's name, so code using it reads the same.
+[lib]
+name = "alacritty_terminal"
 
 [features]
 default = ["serde"]

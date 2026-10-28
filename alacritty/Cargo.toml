@@ -11,8 +11,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies.alacritty_terminal]
+package = "ranma-alacritty-terminal"
 path = "../alacritty_terminal"
-version = "0.26.0"
+version = "0.1.0"
 
 [dependencies.alacritty_config_derive]
 path = "../alacritty_config_derive"

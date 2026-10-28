@@ -37,7 +37,6 @@ dependencies = [
  "ahash",
  "alacritty_config",
  "alacritty_config_derive",
- "alacritty_terminal",
  "bitflags 2.9.4",
  "clap",
  "clap_complete",
@@ -57,6 +56,7 @@ dependencies = [
  "parking_lot",
  "png",
  "polling",
+ "ranma-alacritty-terminal",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -91,30 +91,6 @@ dependencies = [
  "serde",
  "syn",
  "toml",
-]
-
-[[package]]
-name = "alacritty_terminal"
-version = "0.26.0"
-dependencies = [
- "base64",
- "bitflags 2.9.4",
- "home",
- "libc",
- "log",
- "miow",
- "parking_lot",
- "piper",
- "polling",
- "regex-automata",
- "rustix 1.1.2",
- "rustix-openpty",
- "serde",
- "serde_json",
- "signal-hook",
- "unicode-width",
- "vte",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1576,6 +1552,30 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "ranma-alacritty-terminal"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bitflags 2.9.4",
+ "home",
+ "libc",
+ "log",
+ "miow",
+ "parking_lot",
+ "piper",
+ "polling",
+ "regex-automata",
+ "rustix 1.1.2",
+ "rustix-openpty",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "unicode-width",
+ "vte",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "raw-window-handle"
